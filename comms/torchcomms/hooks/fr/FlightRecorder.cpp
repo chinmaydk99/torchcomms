@@ -290,8 +290,13 @@ void FlightRecorder::record(
     te.sizes_.insert(te.sizes_.end(), sizes.begin(), sizes.end());
   }
 
-  const auto idx = op_id % max_entries_;
-  latest_op_id_ = op_id;
+  // Write to the same ring-buffer slot the read path (getIdxFromId) computes
+  // for this entry's local id_. Keying the slot off the *global* op_id instead
+  // desynchronizes writes from reads for any recorder that starts recording at
+  // a nonzero op_id -- e.g. a comm created by split(), or after a non-recorded
+  // op (finalize) consumed an id -- and trips the growth-phase assertion below.
+  const auto idx = getIdxFromId(id_, reset_epoch_);
+  latest_slot_ = idx;
 
   if (entries_.size() < max_entries_) {
     entries_.emplace_back(std::move(te));
@@ -356,7 +361,7 @@ std::vector<FlightRecorder::Entry> FlightRecorder::dump_entries() {
     auto filter = [this](const Entry& e) {
       return e.reset_epoch_ == reset_epoch_;
     };
-    const auto next = ((latest_op_id_ + 1) % max_entries_);
+    const auto next = ((latest_slot_ + 1) % max_entries_);
     std::copy_if(
         entries_.begin() + static_cast<std::ptrdiff_t>(next),
         entries_.end(),
@@ -531,7 +536,7 @@ void FlightRecorder::reset_all() {
     // Soft delete: increment epoch to mark all existing entries as old
     // Store where the new epoch starts in the circular buffer
     reset_epoch_++;
-    reset_epoch_start_idx_[reset_epoch_] = (latest_op_id_ + 1) % max_entries_;
+    reset_epoch_start_idx_[reset_epoch_] = (latest_slot_ + 1) % max_entries_;
     id_ = 0;
   }
 }
