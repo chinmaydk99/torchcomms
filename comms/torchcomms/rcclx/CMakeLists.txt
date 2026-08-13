@@ -2,6 +2,22 @@
 # Extension: torchcomms._comms_rcclx
 file(GLOB TORCHCOMMS_RCCLX_SOURCES "comms/torchcomms/rcclx/*.cpp")
 
+# RcclxApiShardedRelay.cpp and RcclxApiShardedRelayStub.cpp both define the same
+# DefaultRcclxApi::* methods; the glob above pulls in both, which duplicate-links.
+# (BUCK selects one via select(); CMake has no equivalent.) Compile exactly one:
+# the stub (default) links against a stock librccl, while the real relay TU needs
+# the extended RCCL fork that provides ncclShardedRelay*/ncclx::* symbols.
+option(USE_RCCLX_SHARDED_RELAY
+    "Link the Meta extended RCCL sharded-relay TU (requires the extended fork librccl)" OFF)
+foreach(_src ${TORCHCOMMS_RCCLX_SOURCES})
+    get_filename_component(_fname ${_src} NAME)
+    if(NOT USE_RCCLX_SHARDED_RELAY AND _fname STREQUAL "RcclxApiShardedRelay.cpp")
+        list(REMOVE_ITEM TORCHCOMMS_RCCLX_SOURCES ${_src})
+    elseif(USE_RCCLX_SHARDED_RELAY AND _fname STREQUAL "RcclxApiShardedRelayStub.cpp")
+        list(REMOVE_ITEM TORCHCOMMS_RCCLX_SOURCES ${_src})
+    endif()
+endforeach()
+
 set(CONDA_INCLUDE "${CONDA_PREFIX}/include")
 # User can override via ROCM_HOME environment variable; otherwise use
 # ROCM_PATH set by LoadHIP.cmake, included via find_package(Torch).
@@ -14,8 +30,15 @@ else()
 endif()
 set(ROCM_INCLUDE "${ROCM_HOME}/include")
 set(RCCLX_INCLUDE $ENV{RCCLX_INCLUDE})
+if(NOT RCCLX_INCLUDE)
+    set(RCCLX_INCLUDE "${ROCM_HOME}/include/rccl")
+endif()
 message(STATUS "RCCLX_INCLUDE is set to ${RCCLX_INCLUDE}")
-set(RCCLX_SHARED_LIB $ENV{RCCLX_LIB}/librccl.so)
+if(DEFINED ENV{RCCLX_LIB})
+    set(RCCLX_SHARED_LIB $ENV{RCCLX_LIB}/librccl.so)
+else()
+    set(RCCLX_SHARED_LIB "${ROCM_HOME}/lib/librccl.so")
+endif()
 message(STATUS "RCCLX_SHARED_LIB is set to ${RCCLX_SHARED_LIB}")
 
 add_library(torchcomms_comms_rcclx MODULE ${TORCHCOMMS_RCCLX_SOURCES})
